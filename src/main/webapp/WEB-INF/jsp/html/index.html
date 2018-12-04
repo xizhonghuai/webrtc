@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+
+<script src="js/rtc/adapter.js"></script>
+<script src="js/jquery.min.js"></script>
+<title>Insert title here</title>
+</head>
+<body>
+
+	
+	<video id="locaVideo" autoplay></video>
+	<video id="remoteVideo" autoplay></video>
+
+<div>
+    <input id="roomId" type="text" />
+    <button id="startButton" onclick="getMedia()">Start</button>
+    
+  </div>
+
+</body>
+ 
+<script type="text/javascript">
+	var roomId;
+
+	/* websocket客户端部分 */
+
+	var websocket = null;
+
+	//判断当前浏览器是否支持WebSocket
+	if ('WebSocket' in window) {
+		websocket = new WebSocket("wss://topgprs.com:8099/webrtc/websocket");
+	} else {
+		alert("不支持websocket");
+	}
+
+	//连接发生错误的回调方法
+	websocket.onerror = function() {
+		alert("websocket连接失败");
+	}
+
+	//连接成功建立的回调方法
+	websocket.onopen = function() {
+	}
+	//连接关闭的回调方法
+	websocket.onclose = function() {
+	}
+
+	//监听窗口关闭事件，当窗口关闭时，主动去关闭websocket连接，防止连接还没断开就关闭窗口，server端会抛异常。
+	window.onbeforeunload = function() {
+		closeWebSocket();
+	}
+
+	/* 建立rtcpeerConnection */
+
+	 
+	 
+	   // stun和turn服务器
+        var iceServer1 = {
+            "iceServers": [{
+                "url": "stun:stun.l.google.com:19302"
+            }, {
+                "url": "turn:numb.viagenie.ca",
+                "username": "webrtc@live.com",
+                "credential": "muazkh"
+            }]
+        };
+
+	 
+	var Media = navigator.getUserMedia || navigator.webkitGetUserMedia|| navigator.mozGetUserMedia || navigator.msGetUserMedia;
+	var RTCPeerConnection = window.RTCPeerConnection || window.mozRTCPeerConnection || window.webkitRTCPeerConnection; 
+	var RTCSessionDescription = window.mozRTCSessionDescription || window.RTCSessionDescription;
+    var RTCIceCandidate = window.mozRTCIceCandidate || window.RTCIceCandidate;
+    
+var iceServer = {
+    "iceServers": [{
+        "url": "stun:stun.ideasip.com"
+		 
+    }]
+
+};
+
+	var pc = new RTCPeerConnection(iceServer1);
+
+	// 发送给的其他端通知
+	pc.onicecandidate = function(event) {
+		if (event.candidate !== null) {
+			var signalmsg = {
+				"roomId" : $("#roomId").val(),
+				"type" : "ice_candidate",
+				"data" : event.candidate
+
+			}
+			
+			console.log("onicecandidate");
+			
+			websocket.send(JSON.stringify(signalmsg));
+		}
+	};
+
+	// 建立好p2p通道以后 会通过OnAddStream返回一个音视频流的对象
+	pc.onaddstream = function(event) {
+		document.getElementById('remoteVideo').src = URL
+				.createObjectURL(event.stream);
+	};
+
+	// offer和answer
+	var sendOfferFn = function(desc) {
+	
+	    
+		pc.setLocalDescription(desc);
+		console.log('Offer -----');
+		 
+		
+	 
+
+		var signalmsg = {
+			"roomId" : $("#roomId").val(),
+			"type" : "offer",
+			"data" : desc
+		}
+
+		websocket.send(JSON.stringify(signalmsg));
+	};
+
+	var sendAnswerFn = function(desc) {
+	
+		pc.setLocalDescription(desc);
+		console.log('Answer -----');
+
+		var signalmsg = {
+			"roomId" : $("#roomId").val(),
+			"type" : "answer",
+			"data" : desc
+		}
+
+		websocket.send(JSON.stringify(signalmsg));
+	};
+
+	/*  获取本地多媒体流 */
+	
+
+	if (Media) {
+		// 支持
+		//	alert("ok");
+	} else {
+		// 不支持
+		alert("获取本地多媒体流失败");
+	}
+
+	var constraints = {
+		video : true,
+		audio : true
+	};
+
+	function onSuccess(stream) {
+	 
+		// document.getElementById('locaVideo').src = URL.createObjectURL(stream);
+		pc.addStream(stream);
+	 
+		pc.createOffer(sendOfferFn, function(error) {
+			console.log('Failure callback: ' + error);
+		});
+
+	}
+
+	function onError(error) {
+		alert("获取摄像头失败");
+ 
+		pc.createOffer(sendOfferFn, function(error) {
+			console.log('Failure callback: ' + error);
+		}); 
+
+	}
+
+	//Media(constraints, onSuccess, onError);
+	function getMedia(){
+		Media(constraints, onSuccess, onError);
+	}
+
+	//接收到消息的回调方法
+	websocket.onmessage = function(event) {
+	
+	
+
+		var signalmsg = JSON.parse(event.data);
+		
+		if (signalmsg.roomId == $("#roomId").val()){ return false;}
+
+		
+		console.log("收到ws服务数据(TYPE)："+signalmsg.type);
+		
+		console.log(signalmsg.data);
+
+		if (signalmsg.type == "ice_candidate") {
+			pc.addIceCandidate(new RTCIceCandidate(signalmsg.data));
+
+		}
+
+		if (signalmsg.type == "offer") {
+		
+	     
+	       
+			pc.setRemoteDescription(new RTCSessionDescription(signalmsg.data),
+					function() {
+					console.log("setRemoteSDP OK");
+					}, function(e) {
+						console.log(e);
+					});
+
+		
+	  
+			pc.createAnswer(sendAnswerFn, function(error) {
+				console.log(error);
+			});
+
+		}
+
+		if (signalmsg.type == "answer") {
+	//		pc.setRemoteDescription(signalmsg.data)
+			
+			
+			pc.setRemoteDescription(new RTCSessionDescription(signalmsg.data),
+					function() {
+					}, function(e) {
+						console.log(e);
+					});
+
+		}
+
+	}
+</script>
+</html>
